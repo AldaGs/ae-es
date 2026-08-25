@@ -339,15 +339,18 @@ cl /D "MSWindows" /EP $(IntDir)%(Filename).rrc &gt;               "$(ProjectDir)
   <ItemGroup>
     <!-- CUDA kernel. nvcc compiles straight to a linkable .obj (device code
          embedded); MSBuild auto-links CustomBuild .obj outputs. x64 ONLY - CUDA
-         has no ARM64 toolchain. -arch=sm_89 (RTX 4060 / Ada); the SDK sample's
-         sm_50 is REJECTED by CUDA 13. Uses $(CUDA_PATH) (set by the installer). -->
+         has no ARM64 toolchain. Fat binary: sm_75 (Turing / RTX 20 + GTX 16),
+         sm_86 (Ampere / RTX 30-series), sm_89 (Ada / RTX 40-series), plus
+         compute_75 PTX so any GPU >= 7.5 JIT-compiles as a fallback. sm_75 is
+         the FLOOR of CUDA 13 (Maxwell/Pascal/Volta sm_50-72 are REJECTED). Uses
+         $(CUDA_PATH) (set by the installer). -->
     <CustomBuild Include="..\ExtendedShadow_Kernel.cu">
       <FileType>Document</FileType>
-      <Command Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">"$(CUDA_PATH)\bin\nvcc.exe" -D_DEBUG -arch=sm_89 -use_fast_math -m64 -c -ccbin "$(VC_ExecutablePath_x64_x64)" -D_MBCS -Xcompiler /MDd,/EHsc,/W3,/nologo,/Zi -I"$(CUDA_PATH)\include" -I./ -I"$(ProjectDir)..\..\..\GPUUtils" -o "$(IntDir)%(Filename).obj" "$(ProjectDir)..\%(Filename).cu"</Command>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">"$(CUDA_PATH)\bin\nvcc.exe" -D_DEBUG -gencode=arch=compute_75,code=sm_75 -gencode=arch=compute_86,code=sm_86 -gencode=arch=compute_89,code=sm_89 -gencode=arch=compute_75,code=compute_75 -use_fast_math -m64 -c -ccbin "$(VC_ExecutablePath_x64_x64)" -D_MBCS -Xcompiler /MDd,/EHsc,/W3,/nologo,/Zi -I"$(CUDA_PATH)\include" -I./ -I"$(ProjectDir)..\..\..\GPUUtils" -o "$(IntDir)%(Filename).obj" "$(ProjectDir)..\%(Filename).cu"</Command>
       <Outputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(IntDir)%(Filename).obj</Outputs>
-      <Command Condition="'$(Configuration)|$(Platform)'=='Release|x64'">"$(CUDA_PATH)\bin\nvcc.exe" -arch=sm_89 -use_fast_math -m64 -c -ccbin "$(VC_ExecutablePath_x64_x64)" -D_MBCS -Xcompiler /MD,/EHsc,/W3,/nologo,/Zi -I"$(CUDA_PATH)\include" -I./ -I"$(ProjectDir)..\..\..\GPUUtils" -o "$(IntDir)%(Filename).obj" "$(ProjectDir)..\%(Filename).cu"</Command>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Release|x64'">"$(CUDA_PATH)\bin\nvcc.exe" -gencode=arch=compute_75,code=sm_75 -gencode=arch=compute_86,code=sm_86 -gencode=arch=compute_89,code=sm_89 -gencode=arch=compute_75,code=compute_75 -use_fast_math -m64 -c -ccbin "$(VC_ExecutablePath_x64_x64)" -D_MBCS -Xcompiler /MD,/EHsc,/W3,/nologo,/Zi -I"$(CUDA_PATH)\include" -I./ -I"$(ProjectDir)..\..\..\GPUUtils" -o "$(IntDir)%(Filename).obj" "$(ProjectDir)..\%(Filename).cu"</Command>
       <Outputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(IntDir)%(Filename).obj</Outputs>
-      <Message>Compiling CUDA kernel %(Filename).cu (nvcc, sm_89)</Message>
+      <Message>Compiling CUDA kernel %(Filename).cu (nvcc, sm_75+sm_86+sm_89)</Message>
     </CustomBuild>
   </ItemGroup>
   <ItemGroup>

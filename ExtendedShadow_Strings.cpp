@@ -29,7 +29,7 @@ TableString g_strs[StrID_NUMTYPES] = {
 	StrID_Opacity_Param_Name,		"Opacity",
 	StrID_Threshold_Param_Name,		"Alpha Threshold",
 	StrID_Type_Choices,				"Directional|Radial|Inverse Radial",
-	StrID_Fill_Choices,				"Solid|Linear Gradient",
+	StrID_Fill_Choices,				"Solid|Linear Gradient|Radial Gradient",
 };
 
 char *GetStringPtr(int strNum)

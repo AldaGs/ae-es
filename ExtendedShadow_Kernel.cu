@@ -172,11 +172,18 @@ es_march (const float4 *src, float4 *dst, ESGpuParams p)
 
 		// fill colour: solid, or lerp along the gradient axis (layer space)
 		float fr = p.col[0], fg = p.col[1], fb = p.col[2];
-		if (p.fill == 2) {
+		if (p.fill == 2 || p.fill == 3) {			// 2=linear, 3=radial
 			float gdx = p.gex - p.gsx, gdy = p.gey - p.gsy;
 			float gden = gdx * gdx + gdy * gdy;
-			float ginv = (gden > 1e-6f) ? 1.f / gden : 0.f;
-			float tg = ((Lx - p.gsx) * gdx + (Ly - p.gsy) * gdy) * ginv;
+			float rx = Lx - p.gsx, ry = Ly - p.gsy;
+			float tg;
+			if (p.fill == 3) {						// radial: distance / radius
+				float rinv = (gden > 1e-6f) ? 1.f / sqrtf(gden) : 0.f;
+				tg = sqrtf(rx * rx + ry * ry) * rinv;
+			} else {								// linear: axis projection
+				float ginv = (gden > 1e-6f) ? 1.f / gden : 0.f;
+				tg = (rx * gdx + ry * gdy) * ginv;
+			}
 			if (tg < 0.f) tg = 0.f; else if (tg > 1.f) tg = 1.f;
 			fr = p.col[0] + (p.col2[0] - p.col[0]) * tg;
 			fg = p.col[1] + (p.col2[1] - p.col[1]) * tg;

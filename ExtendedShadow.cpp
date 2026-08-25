@@ -201,7 +201,7 @@ ParamsSetup (
 	AEFX_CLR_STRUCT(def);
 	def.flags = PF_ParamFlag_SUPERVISE;
 	PF_ADD_POPUP(	STR(StrID_Fill_Param_Name),
-					2, ES_FILL_SOLID, STR(StrID_Fill_Choices), FILL_DISK_ID);
+					3, ES_FILL_SOLID, STR(StrID_Fill_Choices), FILL_DISK_ID);
 
 	AEFX_CLR_STRUCT(def);
 	PF_ADD_COLOR(	STR(StrID_Color2_Param_Name), 128, 128, 128, COLOR2_DISK_ID);
@@ -275,7 +275,7 @@ ES_SyncUI (
 	if (in_data->appl_id == 'PrMr') return PF_Err_NONE;
 
 	bool isDir  = (params[ES_TYPE]->u.pd.value == ES_TYPE_DIR);
-	bool isGrad = (params[ES_FILL]->u.pd.value == ES_FILL_LINEAR);
+	bool isGrad = (params[ES_FILL]->u.pd.value != ES_FILL_SOLID);
 
 	// Directional: Shadow Direction only. Radial / Inverse: Source + Length %.
 	// (Shadow Length applies to BOTH - it caps radial reach - so it stays shown.)
@@ -731,11 +731,16 @@ SmartRender (
 			const float fadeOut= (float)info->fadeOut;
 			const float tint   = (float)info->tint;
 			const float op     = (float)info->opacity;
-			const bool  isGrad = (info->fill == ES_FILL_LINEAR);
+			const bool  isGrad   = (info->fill == ES_FILL_LINEAR ||
+									info->fill == ES_FILL_RADIAL);
+			const bool  isRadial = (info->fill == ES_FILL_RADIAL);
 			const float gdx    = (float)(info->gex - info->gsx);
 			const float gdy    = (float)(info->gey - info->gsy);
 			const float gden   = gdx*gdx + gdy*gdy;
 			const float ginv   = (gden > 1e-6f) ? 1.0f/gden : 0.0f;
+			// Radial: 1/radius = 1/sqrt(|end-start|^2). Zero radius -> t clamps
+			// to 1 everywhere but the exact center (fully col2).
+			const float rinv   = (gden > 1e-6f) ? 1.0f/sqrtf(gden) : 0.0f;
 			const float col0   = (float)info->color[0];
 			const float col1   = (float)info->color[1];
 			const float col2   = (float)info->color[2];
@@ -813,8 +818,11 @@ SmartRender (
 					// fill colour: solid, or lerp along the gradient axis
 					float fr = col0, fg = col1, fb = col2;
 					if (isGrad) {
-						float tg = ((Lx - (float)info->gsx) * gdx +
-									(Ly - (float)info->gsy) * gdy) * ginv;
+						const float rx = Lx - (float)info->gsx;
+						const float ry = Ly - (float)info->gsy;
+						float tg = isRadial
+								 ? sqrtf(rx*rx + ry*ry) * rinv
+								 : (rx * gdx + ry * gdy) * ginv;
 						if (tg < 0.0f) tg = 0.0f; else if (tg > 1.0f) tg = 1.0f;
 						fr = col0 + (colE0 - col0) * tg;
 						fg = col1 + (colE1 - col1) * tg;

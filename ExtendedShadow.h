@@ -96,9 +96,11 @@ typedef short int			int16;
 #define	ES_TYPE_RADIAL		2
 #define	ES_TYPE_INVRADIAL	3
 
-/* Fill popup. */
+/* Fill popup. Linear ramps along the start->end axis; Radial ramps by distance
+ * from the start point (center), with |end-start| as the radius. */
 #define	ES_FILL_SOLID		1
 #define	ES_FILL_LINEAR		2
+#define	ES_FILL_RADIAL		3
 
 /* Parameter order. MUST match the order of PF_ADD_* in ParamsSetup. */
 enum {
