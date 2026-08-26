@@ -48,10 +48,11 @@
    frame still renders on the CPU and output stays correct while we build. */
 #define ES_GPU_RENDER 1		// STAGE 2: real march kernel
 
-#if HAS_CUDA
+#if HAS_CUDA || HAS_METAL
 // POD mirror of the kernel's ESGpuParams - the LAYOUT MUST MATCH the struct in
-// ExtendedShadow_Kernel.cu exactly (same fields, same order). Kept here as a
-// plain struct so the .cpp needn't pull CUDA headers.
+// ExtendedShadow_Kernel.cu / ExtendedShadow_Kernel_Metal.h exactly (same fields,
+// same order). Kept here as a plain struct so the .cpp needn't pull CUDA/Metal
+// headers.
 struct ESGpuParams {
 	int		type;
 	float	ddx, ddy;
@@ -74,9 +75,20 @@ struct ESGpuParams {
 	int		wx0, wy0, wx1, wy1;
 };
 
+#if HAS_CUDA
 // Defined in ExtendedShadow_Kernel.cu. No extern "C": nvcc uses the same MSVC
 // host compiler (-ccbin), so the mangled names match.
 extern void ES_March_CUDA(const float *src, float *dst, const ESGpuParams &p);
+#endif
+
+#if HAS_METAL
+// Defined in ExtendedShadow_Metal.mm (Objective-C++). extern "C" so the .cpp
+// links against unmangled names.
+extern "C" bool ES_MetalCompile (void *devicePV, void **outData, char *errBuf, int errLen);
+extern "C" void ES_MetalDispose (void *dataPV);
+extern "C" bool ES_March_Metal (void *devicePV, void *queuePV, void *dataPV,
+								void *srcMemPV, void *dstMemPV, ESGpuParams p);
+#endif
 #endif
 
 #define ES_PI		3.14159265358979323846
@@ -896,11 +908,41 @@ GPUDeviceSetup (
 	PF_OutData				*out_data,
 	PF_GPUDeviceSetupExtra	*extra )
 {
-	// We only handle CUDA. For any other framework we don't claim support, so AE
-	// keeps that device on the CPU path.
+	// CUDA (Windows): kernel is statically linked, nothing to build here - just
+	// claim F32 support. Any framework we don't handle is left on the CPU path.
 	if (extra->input->what_gpu == PF_GPU_Framework_CUDA) {
 		out_data->out_flags2 = PF_OutFlag2_SUPPORTS_GPU_RENDER_F32;
 	}
+#if HAS_METAL
+	// Metal (macOS): compile the MSL library and build the pipeline states once
+	// per device, stash them in gpu_data. On a compile error, surface Metal's
+	// own message in AE's error dialog so it can be read directly.
+	else if (extra->input->what_gpu == PF_GPU_Framework_METAL) {
+		PF_GPUDeviceSuite1 *gpu = NULL;
+		if (in_data->pica_basicP->AcquireSuite(kPFGPUDeviceSuite,
+				kPFGPUDeviceSuiteVersion1, (const void**)&gpu) || !gpu)
+			return PF_Err_BAD_CALLBACK_PARAM;
+
+		PF_GPUDeviceInfo info;
+		AEFX_CLR_STRUCT(info);
+		PF_Err e = gpu->GetDeviceInfo(in_data->effect_ref,
+					extra->input->device_index, &info);
+		in_data->pica_basicP->ReleaseSuite(kPFGPUDeviceSuite, kPFGPUDeviceSuiteVersion1);
+		if (e) return e;
+
+		void *metalData = NULL;
+		char  errBuf[512] = {0};
+		if (!ES_MetalCompile(info.devicePV, &metalData, errBuf, sizeof(errBuf))) {
+			PF_STRCPY(out_data->return_msg, "ExtendedShadow Metal build failed: ");
+			strncat(out_data->return_msg, errBuf,
+					sizeof(out_data->return_msg) - strlen(out_data->return_msg) - 1);
+			out_data->out_flags |= PF_OutFlag_DISPLAY_ERROR_MESSAGE;
+			return PF_Err_INTERNAL_STRUCT_DAMAGED;
+		}
+		extra->output->gpu_data = metalData;			// opaque; freed in Setdown
+		out_data->out_flags2 = PF_OutFlag2_SUPPORTS_GPU_RENDER_F32;
+	}
+#endif
 	return PF_Err_NONE;
 }
 
@@ -910,11 +952,17 @@ GPUDeviceSetdown (
 	PF_OutData					*out_data,
 	PF_GPUDeviceSetdownExtra	*extra )
 {
+#if HAS_METAL
+	// Release the Metal pipeline states built in GPUDeviceSetup.
+	if (extra->input->what_gpu == PF_GPU_Framework_METAL && extra->input->gpu_data) {
+		ES_MetalDispose(const_cast<void*>(extra->input->gpu_data));
+	}
+#endif
 	// CUDA kernel is statically linked; nothing device-specific to release.
 	return PF_Err_NONE;
 }
 
-#if HAS_CUDA
+#if HAS_CUDA || HAS_METAL
 static PF_Err
 SmartRenderGPU (
 	PF_InData			*in_data,
@@ -989,12 +1037,31 @@ SmartRenderGPU (
 			p.dstPitch  = outputP->rowbytes / bytesPerPixel;
 			p.step      = 0.5f;
 			p.pad       = (int)info->pad;
-			// wx0..wy1 are filled by ES_March_CUDA after the on-device bbox pass.
+			// wx0..wy1 are filled by the launcher after the on-device bbox pass.
 
-			ES_March_CUDA((const float*)src_mem, (float*)dst_mem, p);
-
-			if (cudaPeekAtLastError() != cudaSuccess)
-				err = PF_Err_INTERNAL_STRUCT_DAMAGED;
+#if HAS_CUDA
+			if (extra->input->what_gpu == PF_GPU_Framework_CUDA) {
+				ES_March_CUDA((const float*)src_mem, (float*)dst_mem, p);
+				if (cudaPeekAtLastError() != cudaSuccess)
+					err = PF_Err_INTERNAL_STRUCT_DAMAGED;
+			}
+#endif
+#if HAS_METAL
+			if (extra->input->what_gpu == PF_GPU_Framework_METAL) {
+				// Metal needs the device + command queue (CUDA used the default
+				// context). gpu_data holds the pipeline states built in setup.
+				PF_GPUDeviceInfo devInfo;
+				AEFX_CLR_STRUCT(devInfo);
+				ERR(gpu->GetDeviceInfo(in_data->effect_ref,
+						extra->input->device_index, &devInfo));
+				if (!err) {
+					if (!ES_March_Metal(devInfo.devicePV, devInfo.command_queuePV,
+							const_cast<void*>(extra->input->gpu_data),
+							src_mem, dst_mem, p))
+						err = PF_Err_INTERNAL_STRUCT_DAMAGED;
+				}
+			}
+#endif
 		}
 	}
 
@@ -1002,7 +1069,7 @@ SmartRenderGPU (
 	suites.HandleSuite1()->host_unlock_handle(infoH);
 	return err;
 }
-#endif // HAS_CUDA
+#endif // HAS_CUDA || HAS_METAL
 
 /* =========================================================================
    Classic render path (Premiere / legacy): pass through. AE uses SmartFX.
@@ -1092,7 +1159,7 @@ EffectMain(
 				err = GPUDeviceSetdown(in_data, out_data,
 						reinterpret_cast<PF_GPUDeviceSetdownExtra*>(extra));
 				break;
-#if HAS_CUDA
+#if HAS_CUDA || HAS_METAL
 			case PF_Cmd_SMART_RENDER_GPU:
 				err = SmartRenderGPU(in_data, out_data,
 						reinterpret_cast<PF_SmartRenderExtra*>(extra));
